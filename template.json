@@ -1,0 +1,274 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2015-01-01/deploymentTemplate.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "file_prefix":{
+            "metadata": {
+                "description": "The first part of the file name. Files will be named {file_prefix}-[YEAR]-[MONTH]-[DAY]-[HOUR]-[MINUTE].{file_extension)"
+            },
+            "type": "string"
+        },
+        "file_extension": {
+            "metadata": {
+                "description": "The extension of file name. Files will be named {file_prefix}-[YEAR]-[MONTH]-[DAY]-[HOUR]-[MINUTE].{file_extension)"
+            },
+            "type": "string"
+        },
+        "data_uri": {
+            "metadata": {
+                "description": "The URL to fetch the data from"
+            },
+            "type": "string"
+        },
+        "refresh_minutes": {
+            "metadata": {
+                "description": "The number of minutes between refreshes. Defaults to 5 minutes"
+            },
+            "type": "int",
+            "minValue": 1,
+            "maxValue": 1440,
+            "defaultValue": 5
+        },
+        "container_name": {
+            "metadata": {
+                "description": "The container name (under the created storage account) where the data will be stored. Defaults to 'raw'. This should be reused for all URLs being downloaded"
+            },
+            "type": "string",
+            "defaultValue": "raw"
+        },
+        "top_level_folder": {
+            "metadata": {
+                "description": "The top level folder (under the container) where the data will be stored. It will be stored as {container_name}/{top_level_folder}/[YEAR]/[MONTH]/[DAY]/{file name}"
+            },
+            "type": "string"
+        },
+        "logic_app_name": {
+            "metadata": {
+                "description": "The name for the deployed Logic App. This should be unique to the URL being polled - meaning one Logic App will be created per URL"
+            },
+            "type": "string",
+            "defaultValue": "[ concat('downloader-logic-app-', uniqueString(resourceGroup().id)) ]"
+        },
+        "connection_name": {
+            "metadata": {
+                "description": "The name of the connector between the storage account and the logic app. This should be reused whenever possible (between different downloaders)"
+            },
+            "type": "string",
+            "defaultValue": "[ concat('downloader-storage-connection-', uniqueString(resourceGroup().id)) ]"
+        },
+        "storage_account_name": {
+            "metadata": {
+                "description": "The name of the storage account where the data will be stored. This should be reused whenever possible (between different downloaders)"
+            },
+            "type": "string",
+            "defaultValue": "[ concat('dwnlstore', uniqueString(resourceGroup().id)) ]"
+        }  
+     },
+    "variables": {},
+    "resources": [
+        {
+            "comments": "LogicApp for Downloading Files from URL on a set minute interval and saving to Azure Blob Storage",
+            "type": "Microsoft.Logic/workflows",
+            "name": "[parameters('logic_app_name')]",
+            "apiVersion": "2017-07-01",
+            "location": "[resourceGroup().location]",
+            "tags": {},
+            "scale": null,
+            "properties": {
+                "state": "Enabled",
+                "definition": {
+                    "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+                    "actions": {
+                        "Fetch_Data_URI": {
+                            "inputs": {
+                                "method": "GET",
+                                "uri": "@{parameters('data_uri')}"
+                            },
+                            "runAfter": {},
+                            "type": "Http"
+                        },
+                        "If_Status_Code_is_in_200s": {
+                            "actions": {
+                                "Upload_to_a_new_Azure_Storage_Blob": {
+                                    "inputs": {
+                                        "body": "@body('Fetch_Data_URI')",
+                                        "host": {
+                                            "connection": {
+                                                "name": "@parameters('$connections')['azureblob']['connectionId']"
+                                            }
+                                        },
+                                        "method": "post",
+                                        "path": "/datasets/default/files",
+                                        "queries": {
+                                            "folderPath": "@{concat(parameters('container_name'),'/', parameters('tlf'),'/', formatDateTime(utcNow(), 'yyyy/MM/dd'))}",
+                                            "name": "@{concat(parameters('file_prefix'), formatDateTime(utcNow(), 'yyyy-MM-dd-HH-mm'), '.', parameters('file_extension'))}",
+                                            "queryParametersSingleEncoded": true
+                                        }
+                                    },
+                                    "runAfter": {},
+                                    "runtimeConfiguration": {
+                                        "contentTransfer": {
+                                            "transferMode": "Chunked"
+                                        }
+                                    },
+                                    "type": "ApiConnection"
+                                }
+                            },
+                            "expression": {
+                                "and": [
+                                    {
+                                        "greaterOrEquals": [
+                                            "@outputs('Fetch_Data_URI')['statusCode']",
+                                            200
+                                        ]
+                                    },
+                                    {
+                                        "lessOrEquals": [
+                                            "@outputs('Fetch_Data_URI')['statusCode']",
+                                            299
+                                        ]
+                                    }
+                                ]
+                            },
+                            "runAfter": {
+                                "Fetch_Data_URI": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "If"
+                        }
+                    },
+                    "contentVersion": "1.0.0.0",
+                    "outputs": {},
+                    "parameters": {
+                        "$connections": {
+                            "defaultValue": {},
+                            "type": "Object"
+                        },
+                        "container_name": {
+                            "type": "String"
+                        },
+                        "data_uri": {
+                            "type": "String"
+                        },
+                        "file_extension": {
+                            "type": "String"
+                        },
+                        "file_prefix": {
+                            "type": "String"
+                        },
+                        "tlf": {
+                           "type": "String"
+                        }
+                    },
+                    "triggers": {
+                        "Scheduled Run": {
+                            "recurrence": {
+                                "frequency": "Minute",
+                                "interval": "[parameters('refresh_minutes')]"
+                            },
+                            "type": "Recurrence"
+                        }
+                    }
+                },
+                "parameters": {
+                    "$connections": {
+                        "value": {
+                            "azureblob": {
+                                "connectionId": "[resourceId('Microsoft.Web/connections', parameters('connection_name'))]",
+                                "connectionName": "azureblob",
+                                "id": "[concat('/subscriptions/', subscription().subscriptionId,'/providers/Microsoft.Web/locations/', resourceGroup().location,'/managedApis/', parameters('connection_name'))]"
+                            }
+                        }
+                    },
+                    "data_uri": {
+                        "value": "[ parameters('data_uri') ]"
+                    },
+                    "file_prefix": {
+                        "value": "[ parameters('file_prefix') ]"
+                    },
+                    "file_extension": {
+                        "value": "[ parameters('file_extension') ]"
+                    },
+                    "container_name": {
+                        "value": "[ parameters('container_name') ]"
+                    },
+                    "tlf": {
+                        "value": "[ parameters('top_level_folder') ]"
+                    }
+                }
+            },
+            "dependsOn": [
+                "[resourceId('Microsoft.Web/connections', parameters('connection_name'))]"
+            ]
+        },
+        {
+            "comments": "Blob storage account (v2) to store JSON records",
+            "type": "Microsoft.Storage/storageAccounts",
+            "sku": {
+                "name": "Standard_LRS",
+                "tier": "Standard"
+            },
+            "kind": "StorageV2",
+            "name": "[parameters('storage_account_name')]",
+            "apiVersion": "2018-02-01",
+            "location": "[resourceGroup().location]",
+            "tags": {},
+            "scale": null,
+            "properties": {
+                "networkAcls": {
+                    "bypass": "AzureServices",
+                    "virtualNetworkRules": [],
+                    "ipRules": [],
+                    "defaultAction": "Allow"
+                },
+                "supportsHttpsTrafficOnly": true,
+                "encryption": {
+                    "services": {
+                        "file": {
+                            "enabled": true
+                        },
+                        "blob": {
+                            "enabled": true
+                        }
+                    },
+                    "keySource": "Microsoft.Storage"
+                },
+                "accessTier": "Hot"
+            },
+            "dependsOn": []
+        },
+        {
+            "comments": "Microsoft.Web/connections for connecting the Logic App to ",
+            "type": "Microsoft.Web/connections",
+            "name": "[parameters('connection_name')]",
+            "apiVersion": "2016-06-01",
+            "location": "[resourceGroup().location]",
+            "scale": null,
+            "properties": {
+                "displayName": "BlobStorageAccount",
+                "parameterValues":{
+                    "AccountName": "[parameters('storage_account_name')]",
+                    "AccessKey": "[listKeys(resourceId('Microsoft.Storage/storageAccounts', parameters('storage_account_name')), providers('Microsoft.Storage', 'storageAccounts').apiVersions[0]).keys[0].value]"
+                },
+                "api": {
+                    "id": "[concat('/subscriptions/', subscription().subscriptionId,'/providers/Microsoft.Web/locations/', resourceGroup().location,'/managedApis/azureblob')]"
+                }
+            },
+            "dependsOn": [
+                "[resourceId('Microsoft.Storage/storageAccounts', parameters('storage_account_name'))]"
+            ]
+        }
+    ],
+    "outputs": {
+        "storageAccountName": {
+            "type": "string" ,
+            "value": "[ parameters('storage_account_name') ]"
+        },
+        "containerName": {
+            "type": "string",
+            "value": "[ parameters('container_name') ]"
+        }
+
+    }
+}

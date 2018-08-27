@@ -1,0 +1,27 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2015-01-01/deploymentParameters.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "file_prefix":{
+            "value": "bing_"
+        },
+        "file_extension": {
+            "value": "json"
+        },
+        "data_uri": {
+            "value": "https://www.bing.com"
+        },
+        "refresh_minutes": {
+            "value": 5
+        },
+        "top_level_folder": {
+            "value": "bing"
+        },
+        "logic_app_name": {
+            "value": "bing_downloader"
+        },
+        "container_name": {
+            "value": "raw"
+        }
+    }
+}
